@@ -8,10 +8,10 @@
 #use delay(clock=16000000)
 #use RS232(stream=uart, baud=9600, xmit=pin_c6, rcv=pin_c7, bits=8, parity=N, stop=1)
 
-#define ledTemperature PIN_B0
-#define ledhumidity PIN_B1
-#define ledLpg PIN_B2
-#define ledHydrogen PIN_B3
+#define LEDTEMPERATURE PIN_B0
+#define LEDHUMIDITY PIN_B1
+#define LEDLPG PIN_B2
+#define LEDHYDROGEN PIN_B3
 
 #include "lcd.c"
 #include "DHT11.h"
@@ -20,12 +20,14 @@ unsigned char humidityIntegral_Byte1, humidityDecimal_Byte2;
 unsigned char temperatureIntegral_Byte3, temperatureDecimal_Byte4;
 unsigned char checksum_Byte5;
 int timeSerial = 10, counterSerial, flagSerial=0, counterDelayDht11, flagDht11, timeLcd=10, counterLcd, flagLcd;
-int btnEnter, btnEsc, btnUp, btnDown, adc, flagChannel0, flagChannel1;
-int16 alertTemperature=40, alertHumidity=40, alertLpg=500, alertHydrogen, dataAdc;
-int16 humidityIntegral=0, humidityDecimal=0, temperaturaIntegral=0, temperatureDecimal=0;
+int btnEnter, btnEsc, btnUp, btnDown, flagChannel0, flagChannel1;
+int16 alertTemperature=40, alertHumidity=40, alertLpg=500, alertHydrogen;
+int16 humidityIntegral=0, humidityDecimal=0, temperaturaIntegral=0, temperatureDecimal=0, dataAdc;
 int16 humidityInLcd, humidityDLcd, temperaturaInLcd, temperatureDLcd, dataAdcLcd;
 
-void readData(int16 *humidityInRead, int16 *humidityDRead, int16 *temperatureInRead, int16 *temperatureDRead);
+int16 dataLpg, dataHydrogen;
+
+void readData(int16 *humidityInRead, int16 *humidityDRead, int16 *temperatureInRead, int16 *temperatureDRead, int16 *dataLpg, int16 *dataHydrogen, int16 dataAdc);
 void sendToSerial(int16 humiditySerial, int16 humiditySerialD, int16 temperatureSerial, int16 temperatureSerialD, int16 dataAdc1);
 void mainMenu();
 void warning(int16 alertTemperature, int16 temperaturaIntegral, int16 alertHumidity, int16 humidityIntegral, int16 alertLpg, int16 dataAdc);
@@ -81,7 +83,7 @@ void main(){
    set_tris_D(0x00);
    setup_oscillator(OSC_16MHZ);
    
-    lcd_init();
+   lcd_init();
  
    Setup_ADC(adc_clock_internal | ADC_TAD_MUL_4);
    Setup_ADC_PORTS(AN0_to_AN1);
@@ -95,28 +97,29 @@ void main(){
    enable_interrupts(GLOBAL);
    
    int position=1;
-
+   set_adc_channel(0);
+   flagChannel0=1;
    
    while(true){
-      readData(&humidityIntegral, &humidityDecimal, &temperaturaIntegral, &temperatureDecimal);
+      readData(&humidityIntegral, &humidityDecimal, &temperaturaIntegral, &temperatureDecimal, &dataLpg, &dataHydrogen, dataAdc);
       //warning();
-      sendToSerial(humidityIntegral, humidityDecimal, temperaturaIntegral, temperatureDecimal, dataAdc);
+      sendToSerial(humidityIntegral, humidityDecimal, temperaturaIntegral, temperatureDecimal, dataLpg);
       updateLcd(humidityIntegral,humidityDecimal,temperaturaIntegral,temperatureDecimal,dataAdc, &humidityInLcd,&humidityDLcd,&temperaturaInLcd,&temperatureDLcd,&dataAdcLcd);
       if(position==1){
          lcd_gotoxy(1,1); printf(lcd_putc, ">Humedad %Ld.%Ld%c  ",humidityInLcd, humidityDLcd, '%');
-         lcd_gotoxy(1,2); printf(lcd_putc, " Temp. %Ld.%Ld%cC  ",temperaturaInLcd, temperatureDLcd, 42);
+         lcd_gotoxy(1,2); printf(lcd_putc, " Temp. %Ld.%LdC  ",temperaturaInLcd, temperatureDLcd);
       }
       if(position==2){
          lcd_gotoxy(1,1); printf(lcd_putc, " Humedad %Ld.%Ld%c   ",humidityInLcd, humidityDLcd, '%');
-         lcd_gotoxy(1,2); printf(lcd_putc, ">Temp. %Ld.%Ld%cC  ",temperaturaInLcd, temperatureDLcd, 42);
+         lcd_gotoxy(1,2); printf(lcd_putc, ">Temp. %Ld.%LdC  ",temperaturaInLcd, temperatureDLcd);
       }
       if(position==3){
-         lcd_gotoxy(1,1); printf(lcd_putc, ">Gas GLP %Ldppm  ", dataAdcLcd);
-         lcd_gotoxy(1,2); printf(lcd_putc, " Gas hidrogeno  ");
+         lcd_gotoxy(1,1); printf(lcd_putc, ">Gas GLP %Ldppm  ", dataLpg);
+         lcd_gotoxy(1,2); printf(lcd_putc, " Gas hidro %Ld ", dataHydrogen);
       }
       if(position==4){
-         lcd_gotoxy(1,1); printf(lcd_putc, " Gas GLP %Ldppm   ", dataAdcLcd);
-         lcd_gotoxy(1,2); printf(lcd_putc, ">Gas hidrogeno   ");
+         lcd_gotoxy(1,1); printf(lcd_putc, " Gas GLP %Ldppm   ", dataLpg);
+         lcd_gotoxy(1,2); printf(lcd_putc, ">Gas hidro %Ldppm  ", dataHydrogen);
       }
       
       if(btnUp){
@@ -153,10 +156,22 @@ void updateLcd(int16 humidityIntegral,int16 humidityDecimal,int16 temperaturaInt
 
 }
 
-void readData(int16 *humidityInRead, int16 *humidityDRead, int16 *temperatureInRead, int16 *temperatureDRead){
-   set_adc_channel(0);
-   read_adc(adc_start_only);
-     
+void readData(int16 *humidityInRead, int16 *humidityDRead, int16 *temperatureInRead, int16 *temperatureDRead, int16 *dataLpg, int16 *dataHydrogen, int16 dataAdc){
+   if(flagChannel0==1 && adc_done()==1){
+      flagChannel0=0;
+      set_adc_channel(1);
+      *dataLpg = dataAdc;
+      read_adc(adc_start_only);
+      flagChannel1=1;
+   }
+   if(flagChannel1==1  && adc_done()==1){
+      flagChannel1=0;
+      set_adc_channel(0);
+      read_adc(adc_start_only);
+      *dataHydrogen = dataAdc;
+      flagChannel0=1;
+   }
+        
    if(flagDht11==1){
       flagDht11=0;
       startSignal();
@@ -192,7 +207,7 @@ void mainMenu(){
 
    int position=1;
    while (!btnEsc){
-      readData(&humidityIntegral, &humidityDecimal, &temperaturaIntegral, &temperatureDecimal);
+      readData(&humidityIntegral, &humidityDecimal, &temperaturaIntegral, &temperatureDecimal, &dataLpg, &dataHydrogen, dataAdc);
       //warning();
       sendToSerial(humidityIntegral, humidityDecimal, temperaturaIntegral, temperatureDecimal, dataAdc);
       if(position==1){
@@ -243,7 +258,7 @@ void timeUpdateSerial(int *timeSerial){
    
    int variableTemporarySerial = *timeSerial; //inicializada al mismo valor que timeSerial
    while (!btnEsc){
-      readData(&humidityIntegral, &humidityDecimal, &temperaturaIntegral, &temperatureDecimal);
+      readData(&humidityIntegral, &humidityDecimal, &temperaturaIntegral, &temperatureDecimal, &dataLpg, &dataHydrogen, dataAdc);
       //warning();
       sendToSerial(humidityIntegral, humidityDecimal, temperaturaIntegral, temperatureDecimal, dataAdc);
       lcd_gotoxy(1,1); printf(lcd_putc,"Tiempo S: %d00ms  ", variableTemporarySerial);
@@ -280,7 +295,7 @@ void timeUpdateLcd(int *timeLcd){
    
    int variableTemporaryLcd = *timeLcd; //inicializada al mismo valor que timeLcd
    while(!btnEsc){
-      readData(&humidityIntegral, &humidityDecimal, &temperaturaIntegral, &temperatureDecimal);
+      readData(&humidityIntegral, &humidityDecimal, &temperaturaIntegral, &temperatureDecimal, &dataLpg, &dataHydrogen, dataAdc);
       //warning();
       sendToSerial(humidityIntegral, humidityDecimal, temperaturaIntegral, temperatureDecimal, dataAdc);
       lcd_gotoxy(1,1); printf(lcd_putc,"Tpo lcd: %d00ms  ", variableTemporaryLcd);
@@ -317,7 +332,7 @@ void configurationAlert(){
 
    int position=1;
    while (!btnEsc){
-      readData(&humidityIntegral, &humidityDecimal, &temperaturaIntegral, &temperatureDecimal);
+      readData(&humidityIntegral, &humidityDecimal, &temperaturaIntegral, &temperatureDecimal, &dataLpg, &dataHydrogen, dataAdc);
       warning(alertTemperature, temperaturaIntegral, alertHumidity, humidityIntegral, alertLpg,dataAdc);
       sendToSerial(humidityIntegral, humidityDecimal, temperaturaIntegral, temperatureDecimal, dataAdc);
       if(position==1){
@@ -380,7 +395,7 @@ void configurationAlertTemp(int16 *alertTemperature){
 
    int variableTempoAlertTemp=*alertTemperature;
    while(!btnEsc){
-      readData(&humidityIntegral, &humidityDecimal, &temperaturaIntegral, &temperatureDecimal);
+      readData(&humidityIntegral, &humidityDecimal, &temperaturaIntegral, &temperatureDecimal, &dataLpg, &dataHydrogen, dataAdc);
       //warning();
       sendToSerial(humidityIntegral, humidityDecimal, temperaturaIntegral, temperatureDecimal, dataAdc);
       lcd_gotoxy(1,1); printf(lcd_putc,"Alarm Temp: %dC     ", variableTempoAlertTemp);
@@ -418,7 +433,7 @@ void configurationAlertHumidity(int16 *alertHumidity){
 
    int variableTempoAlertHumidity = *alertHumidity;
    while(!btnEsc){
-      readData(&humidityIntegral, &humidityDecimal, &temperaturaIntegral, &temperatureDecimal);
+      readData(&humidityIntegral, &humidityDecimal, &temperaturaIntegral, &temperatureDecimal, &dataLpg, &dataHydrogen, dataAdc);
       //warning();
       sendToSerial(humidityIntegral, humidityDecimal, temperaturaIntegral, temperatureDecimal, dataAdc);
       lcd_gotoxy(1,1); printf(lcd_putc,"Alarm Hum: %d%c   ", variableTempoAlertHumidity, '%');
@@ -456,17 +471,18 @@ void configurationAlertLpg(int16 *alertLpg){
 
    int16 variableTempAlertLgp = *alertLpg;
    while(!btnEsc){
-      readData(&humidityIntegral, &humidityDecimal, &temperaturaIntegral, &temperatureDecimal);
+      readData(&humidityIntegral, &humidityDecimal, &temperaturaIntegral, &temperatureDecimal, &dataLpg, &dataHydrogen, dataAdc);
       //warning();
       sendToSerial(humidityIntegral, humidityDecimal, temperaturaIntegral, temperatureDecimal, dataAdc);
       lcd_gotoxy(1,1); printf(lcd_putc,"Alar Glp:%ldppm     ", variableTempAlertLgp);
-      lcd_gotoxy(1,2); printf(lcd_putc,"                     ");
+      lcd_gotoxy(1,2); printf(lcd_putc,"                        ");
       if(btnUp){
          btnUp=0;
          variableTempAlertLgp+=500;
          if(variableTempAlertLgp>10000){ //max 10 000 ppm
             variableTempAlertLgp=10000;
             lcd_gotoxy(1,2); printf(lcd_putc,"Maximo valor");
+            delay_ms(100);
          }
       }
       if(btnDown){
@@ -475,12 +491,13 @@ void configurationAlertLpg(int16 *alertLpg){
          if(variableTempAlertLgp<500){ //minimo 500 ppm
             variableTempAlertLgp=500;
             lcd_gotoxy(1,2); printf(lcd_putc,"Manimo valor");
+            delay_ms(100);
          }
       }
       if(btnEnter){
          btnEnter=0;
          btnEsc=1;
-         *alertLpg = configurationAlertLpg;
+         *alertLpg = variableTempAlertLgp;
       }
    }
    variableTempAlertLgp = *alertLpg;
@@ -490,62 +507,70 @@ void configurationAlertLpg(int16 *alertLpg){
 
 /*void configuracionAlertHydrogen(){
 
-   int variableTempAlertHydro;
+   int variableTempAlertHydro = alertHydrogen;
    while(!btnEsc){
-      readData(&humedadEntera, &humedadDecimal, &temperaturaEntera, &temperaturaDecimal);
+      readData(&humedadEntera, &humedadDecimal, &temperaturaEntera, &temperaturaDecimal, &dataLpg, &dataHydrogen);
       warning();
       sendToSerial(humedadEntera, humedadDecimal, temperaturaEntera, temperaturaDecimal, dataAdc);
       lcd_gotoxy(1,1);
       printf(lcd_putc,"Alarm Hydro: %dppm", variableTempAlertHydro);
+      lcd_gotoxy(1,2); printf(lcd_putc,"                     ");
       if(btnUp){
          btnUp=0;
-         variableTempAlertHydro+=100;
-         //if(variableTempAlertHydro<90){ //max desconocido
-           // variableTempAlertHydro=90;
+         variableTempAlertHydro+=500;
+         //if(variableTempAlertHydro<10000){ //max desconocido
+           // variableTempAlertHydro=10000;
            // lcd_gotoxy(1,2);
            // printf(lcd_putc,"Maximo valor");
+           delay_ms(100);
          //}
       }
       if(btnDown){
          btnDown=0;
-         variableTempAlertHydro-=100;
-         //if(variableTempAlertHydro>10){ //minimo desconocido
-            //variableTempAlertHydro=10;
+         variableTempAlertHydro-=500;
+         //if(variableTempAlertHydro>500){ //minimo desconocido
+            //variableTempAlertHydro=500;
             //lcd_gotoxy(1,2);
             //printf(lcd_putc,"Manimo valor");
+            delay_ms(100);
          //}
       }
       if(btnEnter){
          btnEnter=0;
          btnEsc=1;
-         alarmaHydrod=variableTempAlertHydro;
+         alertHydrogen=variableTempAlertHydro;
       }
    }
    variableTempAlertHydro=alarmaHydro;
    btnEsc=0;
-   configuracionAlarma();
 
 }*/
 
 void warning(int16 alertTemperature, int16 temperaturaIntegral, int16 alertHumidity, int16 humidityIntegral, int16 alertLpg, int16 dataAdc){
    
    if(alertTemperature <= temperaturaIntegral){
-      output_high(ledTemperature);
+      output_high(LEDTEMPERATURE);
    }
    if(alertTemperature > temperaturaIntegral){
-      output_low(ledTemperature);
+      output_low(LEDTEMPERATURE);
    }
    if(alertHumidity <= humidityIntegral){
-      output_high(ledhumidity);
+      output_high(LEDHUMIDITY);
    }
    if(alertHumidity > humidityIntegral){
-      output_low(ledhumidity);
+      output_low(LEDHUMIDITY);
    }
    if(alertLpg <= dataAdc){
-      output_high(ledLpg);
+      output_high(LEDLPG);
    }
    if(alertLpg > dataAdc){
-      output_low(ledLpg);
+      output_low(LEDLPG);
+   }
+   if(alertHydrogen <= dataAdc){
+      output_high(LEDHYDROGEN);
+   }
+   if(alertHydrogen > dataAdc){
+      output_low(LEDHYDROGEN);
    }
    
 }
